@@ -1,6 +1,8 @@
 import click
 
 import torch
+
+from tqdm.auto import tqdm
 from torchtext import data, datasets
 from transformers import RobertaForSequenceClassification, RobertaTokenizerFast
 
@@ -69,15 +71,16 @@ def main(file_path, batch_size, base_model, num_epochs):
 
     model.train()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=2e-5).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-5)
 
     print("Start training")
     for epoch in range(num_epochs):
 
         print(f"Epoch {epoch}")
 
-        for (text, labels), _ in train_iter:
-            labels = labels.type(torch.LongTensor)     
+        for (text, labels), _ in tqdm(train_iter):
+            labels = labels.type(torch.LongTensor)   
+            labels = labels.to(device)  
             output = model(text, labels)
 
             loss, _ = output
