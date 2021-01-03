@@ -1,0 +1,8 @@
+name: rationale
+channels:
+  - defaults
+dependencies:
+  - pytorch
+  - torchtext
+  - python=3.7
+prefix: /home/james/miniconda3/envs/rationale
