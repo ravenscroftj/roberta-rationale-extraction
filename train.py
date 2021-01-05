@@ -128,8 +128,6 @@ def main(file_path, batch_size, base_model, num_epochs):
             running_loss += loss.item()
             global_step += 1
 
-            if i > 100:
-                break
 
         model.eval()
         with torch.no_grad():
@@ -150,8 +148,6 @@ def main(file_path, batch_size, base_model, num_epochs):
 
                 valid_running_loss += loss.item()
 
-                # if i > 100:
-                #     break
 
             average_accuracy = sum([1 for a in answers if a]) / len(answers)
 
