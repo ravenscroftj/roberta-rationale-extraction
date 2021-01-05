@@ -114,7 +114,7 @@ def main(file_path, batch_size, base_model, num_epochs):
         val_iter.init_epoch()
 
         for i, (text, labels) in enumerate(tqdm(train_iter, desc="train")):
-            labels = labels.type(torch.LongTensor)   
+            #labels = labels.type(torch.LongTensor)   
             labels = labels.to(device)  
             output = model(text, labels)
 
