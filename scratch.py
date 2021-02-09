@@ -1,31 +1,33 @@
 # %%
-import model
 import torch
+from model import GeneratorModel, Encoder, RationaleSystem
 
-emb = torch.empty((5000,128)).uniform_()
-emb[0] = torch.empty((128,)).zero_()
-# %%
-gen = model.GeneratorModel(emb, rnn_layers=2, rnn_dim=128, dropout=0.5).cuda()
-# %%
-
-x = torch.empty((10, 256)).random_(0,5000).type(torch.LongTensor).cuda()
 
 # %%
-mask = gen.forward(x).cuda()
-# %%
-enc = model.Encoder(emb, 2).cuda()
-# %%
-h = enc(x, mask)
+from data import IMDBDataModule
+data = IMDBDataModule(32)
+data.setup()
 
 # %%
-import torch.nn.functional as F
-y = torch.argmax(torch.rand_like(h), dim=1)
+from train import general_args
 
-# %%
-m = model.RationaleSystem(gen, enc).cuda()
-
-m.training_step((x,y), None)
-
+ap = general_args()
+args = ap.parse_args("")
 # %%
 
+
+gen = GeneratorModel(args, 
+embeddings=data.text_field.vocab.vectors, 
+padding_idx=data.text_field.vocab.stoi['<pad>'])
+
+enc = Encoder(args,
+embeddings=data.text_field.vocab.vectors, 
+num_classes=len(data.label_field.vocab), 
+padding_idx=data.text_field.vocab.stoi['<pad>'])
+
+model = RationaleSystem(args, gen, enc)
 # %%
+batch = next(iter(data.train_dataloader()))
+loss = model.training_step(batch, 0)
+# %%
+loss.backward()

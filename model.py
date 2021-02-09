@@ -5,29 +5,35 @@ import torch.nn.functional as F
 
 from cnn import CNN
 
+from argparse import ArgumentParser
+
+from torch.optim import Adam
+
+
 class GeneratorModel(pl.LightningModule):
 
-    def __init__(self, embeddings: torch.Tensor, rnn_layers: int = 2, rnn_dim: int = 128, dropout: float = 0.5, padding_idx=0):
+
+    def __init__(self, args, embeddings: torch.Tensor, padding_idx=0):
         super(GeneratorModel, self).__init__()
 
         self.embed = nn.Embedding.from_pretrained(
             embeddings, padding_idx=padding_idx, freeze=True)
 
-        self.dropout_1 = nn.Dropout(dropout)
+        self.dropout_1 = nn.Dropout(args.dropout)
 
-        self.rnn_dim = rnn_dim
+        self.rnn_dim = args.rnn_dim
 
         self.rnn = nn.GRU(input_size=self.embed.embedding_dim,
-                          hidden_size=rnn_dim,
-                          num_layers=rnn_layers,
+                          hidden_size=args.rnn_dim,
+                          num_layers=args.rnn_layers,
                           bidirectional=True)
 
         #self.rnn = CNN(embedding_dim=self.embed.embedding_dim, num_layers=1)
 
-        self.dropout_2 = nn.Dropout(dropout)
+        self.dropout_2 = nn.Dropout(args.dropout)
 
         # linear dense layer applied to each token during sampling
-        self.z_prob_1 = nn.Linear(2*rnn_dim, 1)
+        self.z_prob_1 = nn.Linear(2*args.rnn_dim, 1)
         # linear dense layer applied to hidden state during sampling
 
 
@@ -79,20 +85,20 @@ class GeneratorModel(pl.LightningModule):
 
 class Encoder(pl.LightningModule):
 
-    def __init__(self, embeddings, num_classes: int, rnn_layers: int = 2, rnn_dim: int = 128, dropout: float = 0.5, padding_idx=0):
+    def __init__(self, args, embeddings, num_classes: int, padding_idx=0):
         super(Encoder, self).__init__()
 
         self.embed = nn.Embedding.from_pretrained(
             embeddings, padding_idx=padding_idx, freeze=True)
 
         self.rnn = nn.GRU(input_size=self.embed.embedding_dim,
-                          hidden_size=rnn_dim,
-                          num_layers=rnn_layers,
+                          hidden_size=args.rnn_dim,
+                          num_layers=args.rnn_layers,
                           bidirectional=True)
 
-        self.dropout_2 = nn.Dropout(dropout)
+        self.dropout_2 = nn.Dropout(args.dropout)
 
-        self.hidden = nn.Linear(2*rnn_dim, num_classes)
+        self.hidden = nn.Linear(2*args.rnn_dim, num_classes)
 
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor):
@@ -106,7 +112,7 @@ class Encoder(pl.LightningModule):
         # apply dropout to output
         h= self.dropout_2(h)
 
-        h_concat = torch.cat((h[0,:, 128:], h[-1,:, :128]), dim=1)
+        h_concat = torch.cat((h[:,0, 128:], h[:,-1, :128]), dim=1)
 
         logit = self.hidden(h_concat)
 
@@ -115,8 +121,9 @@ class Encoder(pl.LightningModule):
 
 class RationaleSystem(pl.LightningModule):
 
-    def __init__(self, gen: nn.Module, enc: nn.Module):
+    def __init__(self, args, gen: nn.Module, enc: nn.Module):
         super().__init__()
+        self.args = args
         self.gen = gen
         self.enc = enc
         self.celoss = nn.CrossEntropyLoss()
@@ -129,13 +136,18 @@ class RationaleSystem(pl.LightningModule):
         
         return logits
 
+    def configure_optimizers(self):
+        return Adam(self.parameters(), lr=self.args.learning_rate)
+
     def training_step(self, batch, batch_idx):
         x,y = batch
         logits = self(x)
 
-        loss = F.cross_entropy(logits, y)
+        loss = F.cross_entropy(logits, y) * self.gen.logpz
         loss += self.continuity_lambda * self.gen.zdiff
         loss += self.selection_lambda * self.gen.zsum
+
+        # multiply loss by log prob
 
         return loss
 
