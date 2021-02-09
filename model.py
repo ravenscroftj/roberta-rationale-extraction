@@ -76,9 +76,14 @@ class GeneratorModel(pl.LightningModule):
         self.logpz = F.binary_cross_entropy(probs, mask)
 
         # term 1 in rationale regularizer - penalise long summaries
-        self.zsum = mask.sum()
+        self.zsum = torch.mean(mask.sum(dim=1))
+
+        l_padded_mask =  torch.cat( [mask[:,0].unsqueeze(1), mask] , dim=1)
+        r_padded_mask =  torch.cat( [mask, mask[:,-1].unsqueeze(1)] , dim=1)
+
+
         # term 2 in rationale regularizer - penalise incoherent summaries
-        self.zdiff = (mask[1:]-mask[:-1]).abs().sum()
+        self.zdiff = torch.mean( torch.sum( torch.abs( l_padded_mask - r_padded_mask ) , dim=1) )
 
         return mask
 
