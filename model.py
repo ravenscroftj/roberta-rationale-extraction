@@ -7,7 +7,11 @@ from cnn import CNN
 
 from argparse import ArgumentParser
 
+from typing import Optional
+
 from torch.optim import Adam
+
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
 class GeneratorModel(pl.LightningModule):
@@ -50,22 +54,27 @@ class GeneratorModel(pl.LightningModule):
         return z
 
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, lens: torch.Tensor) -> torch.Tensor:
         # transform token ids into embeddings:
         # (batch, seq_len) -> (batch, seq_len, embed_dim)
         embedded = self.dropout_1(self.embed(x))
 
         # permute (batch, seq_len, embed_dim) -> (seq_len, batch, embed_dim)
-        embedded = embedded.permute(1, 0, 2)
+        #embedded = embedded.permute(1, 0, 2)
 
-        # pass embedded tokens (batch, max_len, embed_dim) through bi-RNN
-        # take final state (batch, 2*rnn_dim)
-        h_concat, hidden = self.rnn(embedded)
+        packed = pack_padded_sequence(embedded, lens, batch_first=False)
+
+        h, hidden = self.rnn(packed)
         # apply dropout to output
-        h_final= self.dropout_2(h_concat)
+
+        unpacked, _ = pad_packed_sequence(h, batch_first=False, total_length=x.shape[0])
+
+        unpacked = self.dropout_2(unpacked)
+
+        #h_concat = unpacked[:,-1, :]
 
         # calculate probabilities for z
-        probs = self.__z_forward(h_final)
+        probs = self.__z_forward(unpacked)
 
         # now we sample rationales for this batch
         mask = torch.bernoulli(probs).detach()
@@ -103,21 +112,33 @@ class Encoder(pl.LightningModule):
 
         self.dropout_2 = nn.Dropout(args.dropout)
 
+        self.rnn_dim = args.rnn_dim
+
         self.hidden = nn.Linear(2*args.rnn_dim, num_classes)
 
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor):
+    def forward(self, x: torch.Tensor, lens, mask: Optional[torch.Tensor] = None):
         
-        embedded = self.embed(x) * mask.T.unsqueeze(-1)
+        embedded = self.embed(x).permute(1,0,2)
+
+        if mask is not None:
+            embedded *= mask.T.unsqueeze(-1)
+            
+
         # permute (batch, seq_len, embed_dim) -> (seq_len, batch, embed_dim)
-        embedded = embedded.permute(1, 0, 2)
+        #embedded = embedded.permute(1, 0, 2)
         # pass embedded tokens (batch, max_len, embed_dim) through bi-RNN
         # take final state (batch, 2*rnn_dim)
-        h, hidden = self.rnn(embedded)
-        # apply dropout to output
-        h= self.dropout_2(h)
+        packed = pack_padded_sequence(embedded, lens, batch_first=True)
 
-        h_concat = torch.cat((h[:,0, 128:], h[:,-1, :128]), dim=1)
+        h, hidden = self.rnn(packed)
+        # apply dropout to output
+
+        unpacked, _ = pad_packed_sequence(h, batch_first=True)
+
+        unpacked = self.dropout_2(unpacked)
+
+        h_concat = unpacked[:,-1, :]
 
         logit = self.hidden(h_concat)
 
@@ -135,25 +156,67 @@ class RationaleSystem(pl.LightningModule):
         self.continuity_lambda = .01
         self.selection_lambda = .01
 
-    def forward(self, x: torch.Tensor):
-        mask = self.gen(x)
-        logits = self.enc(x, mask)
+        self.accuracy = pl.metrics.Accuracy()
+        self.val_accuracy = pl.metrics.Accuracy()
+
+        self.epoch_train_loss = 0
+        self.epoch_val_loss = 0
+
+
+    def forward(self, x: torch.Tensor, lens: torch.Tensor):
+
+        lens = lens.to(torch.int64).cpu()
+
+        mask = None
+        if self.gen is not None:
+            mask = self.gen(x, lens)
+
+        logits = self.enc(x, lens, mask)
         
         return logits
 
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=self.args.learning_rate)
+ 
+    def __forward_step(self, batch):
+        (x,lens),y = batch
+        logits = self(x,lens)
+
+        loss = F.cross_entropy(logits, y)
+
+        if self.gen is not None:
+
+            loss * self.gen.logpz
+            loss += self.continuity_lambda * self.gen.zdiff
+            loss += self.selection_lambda * self.gen.zsum
+
+        return logits, loss
 
     def training_step(self, batch, batch_idx):
         x,y = batch
-        logits = self(x)
-
-        loss = F.cross_entropy(logits, y) * self.gen.logpz
-        loss += self.continuity_lambda * self.gen.zdiff
-        loss += self.selection_lambda * self.gen.zsum
-
-        # multiply loss by log prob
-
+        logits, loss = self.__forward_step(batch)
+        self.log('train_acc_step', self.accuracy(logits, y))
+        self.epoch_train_loss += loss
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        x,y = batch
+        logits, loss = self.__forward_step(batch)
+        self.log('val_acc_step', self.val_accuracy(logits, y))
+        self.epoch_val_loss += loss
+        return loss
+
+
+    def training_epoch_end(self, outputs) -> None:
+
+        self.log('train_acc', self.accuracy.compute(), prog_bar=True)
+        self.log('epoch_loss', self.epoch_train_loss, prog_bar=True)
+        self.epoch_train_loss = 0
+        self.accuracy.reset()
         
+
+
+    def validation_epoch_end(self, outputs) -> None:
+        self.log('val_acc', self.val_accuracy.compute(), prog_bar=True)
+        self.epoch_val_loss = 0
+        self.val_accuracy.reset()

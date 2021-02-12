@@ -16,6 +16,8 @@ from data import IMDBDataModule
 
 def general_args():
     ap = ArgumentParser()
+    
+    ap.add_argument("--no-generator", action="store_true", default=False)
 
     ap.add_argument('--learning-rate', type=float, default=1e-3)
     ap.add_argument("--batch-size", type=int, default=32)
@@ -29,16 +31,20 @@ def main():
     parser = general_args()
     parser = pl.Trainer.add_argparse_args(parser)
 
-    trainer = pl.Trainer(gpus=1)
-
     args = parser.parse_args()
+
+    trainer = pl.Trainer.from_argparse_args(args)
 
     data = IMDBDataModule(args.batch_size)
     data.setup()
 
-    gen = GeneratorModel(args, 
-    embeddings=data.text_field.vocab.vectors, 
-    padding_idx=data.text_field.vocab.stoi['<pad>'])
+    if args.no_generator:
+        gen = None
+    else:
+        gen = GeneratorModel(args, 
+        embeddings=data.text_field.vocab.vectors, 
+        padding_idx=data.text_field.vocab.stoi['<pad>'])
+
 
     enc = Encoder(args,
     embeddings=data.text_field.vocab.vectors, 

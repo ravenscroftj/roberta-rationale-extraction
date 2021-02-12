@@ -4,7 +4,7 @@ from torch.utils.data.dataloader import DataLoader
 
 from torchtext.data import Field, BucketIterator
 from torchtext.data.field import LabelField
-from torchtext.vocab import FastText
+from torchtext.vocab import FastText, GloVe
 from torchtext.datasets import IMDB
 
 class IMDBDataModule(pl.LightningDataModule):
@@ -15,13 +15,13 @@ class IMDBDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
 
-        self.text_field = Field(sequential=True, fix_length=200)
+        self.text_field = Field(sequential=True, fix_length=200, include_lengths=True)
         self.label_field = LabelField()
 
         train_val, test = IMDB.splits(self.text_field, self.label_field)
         train, val = train_val.split()
 
-        self.text_field.build_vocab(train, vectors=FastText('simple'))
+        self.text_field.build_vocab(train, vectors=GloVe())#vectors=FastText('simple'))
         self.label_field.build_vocab(train)
 
 
@@ -29,6 +29,10 @@ class IMDBDataModule(pl.LightningDataModule):
             (train, test, val), 
             batch_size=self.batch_size, 
         )
+
+        self.train_iter.sort_within_batch = True
+        self.val_iter.sort_within_batch = True
+
 
         
 
