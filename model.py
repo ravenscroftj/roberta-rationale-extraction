@@ -42,14 +42,26 @@ class GeneratorModel(pl.LightningModule):
 
 
 
-    def __z_forward(self, x: torch.Tensor):
+    def __z_forward(self, x: torch.Tensor, lens: torch.Tensor):
         
-        seqlen, batchlen, _ = x.shape
+        seqlen, batchlen, zdim  = x.shape
 
-        z = torch.zeros((seqlen, batchlen)).to(x.device)
+        zinput = x.reshape((-1, zdim))
 
-        for i in range(seqlen):
-           z[i] = torch.sigmoid(self.z_prob_1(x[i, :, :])).squeeze()
+        z = torch.sigmoid(self.z_prob_1(zinput))
+
+        # z = torch.zeros((seqlen, batchlen)).to(x.device)
+
+        # for i in range(seqlen):
+        #    z[i] = torch.sigmoid(self.z_prob_1(x[i, :, :])).squeeze()
+
+        z = z.reshape([seqlen, batchlen])
+
+        mask = (torch.arange(seqlen)[None, :] < lens.unsqueeze(1)[:, None]).squeeze(1).to(x.device, dtype=torch.int)
+
+        z *= mask.T
+
+        # mask zeros longer 
 
         return z
 
@@ -71,10 +83,10 @@ class GeneratorModel(pl.LightningModule):
 
         unpacked = self.dropout_2(unpacked)
 
-        #h_concat = unpacked[:,-1, :]
+        #h_concat = unpacked[-1, :, :]
 
         # calculate probabilities for z
-        probs = self.__z_forward(unpacked)
+        probs = self.__z_forward(unpacked, lens)
 
         # now we sample rationales for this batch
         mask = torch.bernoulli(probs).detach()
@@ -147,11 +159,12 @@ class Encoder(pl.LightningModule):
 
 class RationaleSystem(pl.LightningModule):
 
-    def __init__(self, args, gen: nn.Module, enc: nn.Module):
+    def __init__(self, args, embeddings, num_classes, padding_idx):
         super().__init__()
+        #self.save_hyperparameters()
         self.args = args
-        self.gen = gen
-        self.enc = enc
+        self.gen = GeneratorModel(args, embeddings, padding_idx)
+        self.enc = Encoder(args, embeddings, num_classes, padding_idx)
         self.celoss = nn.CrossEntropyLoss()
         self.continuity_lambda = .01
         self.selection_lambda = .01
@@ -173,14 +186,14 @@ class RationaleSystem(pl.LightningModule):
 
         logits = self.enc(x, lens, mask)
         
-        return logits
+        return logits, mask
 
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=self.args.learning_rate)
  
     def __forward_step(self, batch):
         (x,lens),y = batch
-        logits = self(x,lens)
+        logits, _ = self(x,lens)
 
         loss = F.cross_entropy(logits, y)
 
@@ -218,5 +231,6 @@ class RationaleSystem(pl.LightningModule):
 
     def validation_epoch_end(self, outputs) -> None:
         self.log('val_acc', self.val_accuracy.compute(), prog_bar=True)
+        self.log('val_loss', self.epoch_val_loss, prog_bar=True)
         self.epoch_val_loss = 0
         self.val_accuracy.reset()

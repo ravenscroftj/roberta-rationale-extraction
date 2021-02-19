@@ -1,3 +1,4 @@
+import os
 import torch
 import pytorch_lightning as pl
 
@@ -33,25 +34,40 @@ def main():
 
     args = parser.parse_args()
 
-    trainer = pl.Trainer.from_argparse_args(args)
+    
 
     data = IMDBDataModule(args.batch_size)
-    data.setup()
+    data.prepare_data()
 
-    if args.no_generator:
-        gen = None
-    else:
-        gen = GeneratorModel(args, 
-        embeddings=data.text_field.vocab.vectors, 
-        padding_idx=data.text_field.vocab.stoi['<pad>'])
+    # if args.no_generator:
+    #     gen = None
+    # else:
+    #     gen = GeneratorModel(args, 
+    #     embeddings=data.text_field.vocab.vectors, 
+    #     padding_idx=data.text_field.vocab.stoi['<pad>'])
 
 
-    enc = Encoder(args,
-    embeddings=data.text_field.vocab.vectors, 
+    # enc = Encoder(args,
+    # embeddings=data.text_field.vocab.vectors, 
+    # num_classes=len(data.label_field.vocab), 
+    # padding_idx=data.text_field.vocab.stoi['<pad>'])
+
+    model = RationaleSystem(args, embeddings=data.text_field.vocab.vectors, 
     num_classes=len(data.label_field.vocab), 
     padding_idx=data.text_field.vocab.stoi['<pad>'])
 
-    model = RationaleSystem(args, gen, enc)
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(
+        filepath=os.getcwd(),
+        save_top_k=3,
+        save_weights_only=True,
+        verbose=True,
+        monitor='val_loss',
+        mode='min',
+        prefix=''
+    )
+
+
+    trainer = pl.Trainer.from_argparse_args(args, callbacks=[checkpoint_callback])
 
     trainer.fit(model, data)
 
