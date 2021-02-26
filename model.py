@@ -105,17 +105,19 @@ class GeneratorModel(pl.LightningModule):
         # calculate prob (probability - 1 or 0 for each token)
         # using this in our loss term allows us to backprop and 
         # change the weights in z_prob_1
-        self.logpz = F.binary_cross_entropy(probs, mask)
+        self.logpz = F.binary_cross_entropy(probs, mask, reduce=False)
+
+        self.probs = probs
 
         # term 1 in rationale regularizer - penalise long summaries
-        self.zsum = torch.mean(mask.sum(dim=0))
+        self.zsum = mask.sum(dim=0)
 
         l_padded_mask =  torch.cat( [mask[0,:].unsqueeze(0), mask] , dim=0)
         r_padded_mask =  torch.cat( [mask, mask[-1,:].unsqueeze(0)] , dim=0)
 
 
         # term 2 in rationale regularizer - penalise incoherent summaries
-        self.zdiff = torch.mean(torch.sum(torch.abs(l_padded_mask - r_padded_mask), dim=0))
+        self.zdiff = torch.sum(torch.abs(l_padded_mask - r_padded_mask), dim=0)
 
         return mask
 
@@ -253,16 +255,21 @@ class RationaleSystem(pl.LightningModule):
     def __calculate_loss(self, logits, y):
         """Calculate loss for predicted logits"""
         
-        enc_loss = F.cross_entropy(logits, y)
+        enc_loss = F.cross_entropy(logits, y, reduce=False)
 
         gen_loss = 0
         if self.gen is not None:
-            gen_loss = ( enc_loss.detach() + 
-                (self.continuity_lambda * self.gen.zdiff) +
-                (self.selection_lambda * self.gen.zsum)
-            ) * self.gen.logpz
 
-        return enc_loss + gen_loss
+            lasso_loss = self.gen.probs.mean(axis=0)
+
+            gen_loss = ( 
+                enc_loss.detach()
+                + lasso_loss
+                + (self.continuity_lambda * self.gen.zdiff)
+                + (self.selection_lambda * self.gen.zsum)
+            ) * self.gen.logpz.mean(0)
+
+        return enc_loss.mean() + gen_loss.mean()
  
 
     def training_step(self, batch, batch_idx):
